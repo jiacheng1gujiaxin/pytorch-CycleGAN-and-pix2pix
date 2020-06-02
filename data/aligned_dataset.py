@@ -1,28 +1,40 @@
-import os.path
-from data.base_dataset import BaseDataset, get_params, get_transform
-from data.image_folder import make_dataset
+import os
+from torch.utils.data import Dataset
+from data.base_dataset import get_params, get_transform
 from PIL import Image
 
+from util.str2label import get_convert
 
-class AlignedDataset(BaseDataset):
+
+class AlignedDataset(Dataset):
     """A dataset class for paired image dataset.
 
     It assumes that the directory '/path/to/data/train' contains image pairs in the form of {A,B}.
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, opt):
+    def __init__(self, dataroot, phase, load_size, crop_size, preprocess):
         """Initialize this dataset class.
 
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
+            dataroot (str) -- images dir
+            phase (str) -- train, val, test
+            load_size (tuple) -- (width, height) if None don`t resize
+            crop_size (tuple) -- (width, height) if None don`t crop
+            preprocess (list) -- ['resize', 'crop', 'flip']
         """
-        BaseDataset.__init__(self, opt)
-        self.dir_AB = os.path.join(opt.dataroot, opt.phase)  # get the image directory
-        self.AB_paths = sorted(make_dataset(self.dir_AB, opt.max_dataset_size))  # get image paths
-        assert(self.opt.load_size >= self.opt.crop_size)   # crop_size should be smaller than the size of loaded image
-        self.input_nc = self.opt.output_nc if self.opt.direction == 'BtoA' else self.opt.input_nc
-        self.output_nc = self.opt.input_nc if self.opt.direction == 'BtoA' else self.opt.output_nc
+        super(AlignedDataset, self).__init__()
+        self.dir_AB = os.path.join(dataroot, phase)  # get the image directory
+        self.AB_paths = sorted(os.listdir(self.dir_AB)) # get image paths
+        self.phase = phase
+        self.load_size = load_size
+        self.crop_size = crop_size
+        self.preprocess = preprocess
+        self.convert = get_convert()
+        if load_size is not None and crop_size is not None:
+            assert(load_size[0] >= crop_size[0] and load_size[1] >= crop_size[1])   # crop_size should be smaller than the size of loaded image
+
 
     def __getitem__(self, index):
         """Return a data point and its metadata information.
@@ -38,7 +50,9 @@ class AlignedDataset(BaseDataset):
         """
         # read a image given a random integer index
         AB_path = self.AB_paths[index]
-        AB = Image.open(AB_path).convert('RGB')
+        # text to tensor -- name (idx_text.jpg)
+
+        AB = Image.open(os.path.join(self.dir_AB, AB_path)).convert('RGB')
         # split AB image into A and B
         w, h = AB.size
         w2 = int(w / 2)
@@ -46,12 +60,11 @@ class AlignedDataset(BaseDataset):
         B = AB.crop((w2, 0, w, h))
 
         # apply the same transform to both A and B
-        transform_params = get_params(self.opt, A.size)
-        A_transform = get_transform(self.opt, transform_params, grayscale=(self.input_nc == 1))
-        B_transform = get_transform(self.opt, transform_params, grayscale=(self.output_nc == 1))
-
-        A = A_transform(A)
-        B = B_transform(B)
+        tranform = get_transform(self.preprocess, self.load_size, self.crop_size,
+                                 grayscale=False, method=Image.BICUBIC, convert=True)
+        if self.phase != 'test':
+            A = tranform(A)
+            B = tranform(B)
 
         return {'A': A, 'B': B, 'A_paths': AB_path, 'B_paths': AB_path}
 
